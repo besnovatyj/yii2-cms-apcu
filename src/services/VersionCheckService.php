@@ -66,15 +66,18 @@ final class VersionCheckService
     }
 
     /**
-     * Релизы из ленты, новые первыми (порядок RSS). Первый `<title>` ленты — заголовок канала
-     * «APCu x.y.z», далее у каждого `<item>` title = «APCu x.y.z», description = changelog.
+     * Релизы из ленты, новые первыми (порядок RSS).
+     *
+     * Лента PECL — RSS 1.0 (RDF): элементы вида `<item rdf:about="…">`, внутри `<title>APCu x.y.z</title>`
+     * и `<description>` с changelog (plain-text, HTML-сущности, отступы шаблона). Разбирается regex'ами,
+     * как в оригинале, но с учётом атрибутов у `<item>`.
      *
      * @return list<array{version: string, changes: string}>
      */
     private function parseReleases(string $rss): array
     {
         $releases = [];
-        if (preg_match_all('!<item>(.*?)</item>!s', $rss, $items) < 1) {
+        if (preg_match_all('!<item\b[^>]*>(.*?)</item>!s', $rss, $items) < 1) {
             return [];
         }
         foreach ($items[1] as $item) {
@@ -83,9 +86,14 @@ final class VersionCheckService
             }
             $changes = '';
             if (preg_match('!<description>(.*?)</description>!s', $item, $d)) {
-                $changes = trim(html_entity_decode(strip_tags(
-                    preg_replace('!^\s*<!\[CDATA\[(.*)\]\]>\s*$!s', '$1', $d[1]) ?? $d[1]
-                ), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+                $text = preg_replace('~^\s*<!\[CDATA\[(.*)\]\]>\s*$~s', '$1', $d[1]) ?? $d[1];
+                $text = html_entity_decode(strip_tags($text), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+                // отступы шаблона ленты у первой строки и хвоста — убираем построчно
+                $lines = array_map(static fn(string $l): string => rtrim($l), explode("\n", $text));
+                $changes = trim(implode("\n", array_map(
+                    static fn(string $l): string => preg_replace('/^\s{4,}/', '', $l) ?? $l,
+                    $lines
+                )));
             }
             $releases[] = ['version' => $t[1], 'changes' => $changes];
         }
